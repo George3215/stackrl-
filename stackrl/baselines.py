@@ -1,15 +1,16 @@
 """
 Baseline policies with no learning, using heuristics
 """
+#导入标准库，用于时间戳、日志记录、实验时间标记
 from datetime import datetime
-import time
-import os
+import time #用于计时、sleep、性能统计
+import os #用于路径、环境变量、文件系统操作
 
-import gin
-import gym
-import numpy as np
-from scipy import signal
-from scipy import ndimage
+import gin #Google 的 Gin-config 配置系统，用于将超参数与代码解耦
+import gym #OpenAI Gym 接口，用于定义和交互强化学习环境
+import numpy as np #数值计算核心库，在本文件中主要用于矩阵运算、滑窗计算、mask 操作等
+from scipy import signal #用于二维相关（correlate2d）、卷积等信号处理操作
+from scipy import ndimage #用于图像级操作，如 sobel、minimum_filter
 try:
   import cv2 as cv
 except :
@@ -18,30 +19,35 @@ except :
 # from stackrl import envs
 from stackrl import agents
 
-def get_inputs(inputs, mask=None):
+def get_inputs(inputs, mask=None):   #从环境返回的 inputs 中提取并归一化用于计算启发式值的数组
+       #mask 参数在这里未使用，只是为了接口统一（与其他 heuristic 函数保持签名一致）
   """Extract and normalize the arrays from inputs"""
-  gmax = inputs[0][:,:,1].max()
-  o = inputs[0][:,:,0]/gmax
-  n = inputs[1][:,:,0]/gmax
+  gmax = inputs[0][:,:,1].max()  #inputs[0]：通常表示当前场景 / 地形状态（例如高度图 + 目标图），整个场景中，目标高度通道的最大值
+  o = inputs[0][:,:,0]/gmax#当前地形高度
+  n = inputs[1][:,:,0]/gmax#待放置物体高度
   return o,n
 
-def height(inputs, mask=None, **kwargs):
+#基于高度的启发式策略函数
+def height(inputs, mask=None, **kwargs): #把当前物体 n 放到场景 o 的每一个可能位置后，形成的最大高度
+  #mask = None的意思是，如果不传入参数，mask就是None
   """Height based heuristic."""
-  o,n = get_inputs(inputs, mask)
-  f = np.zeros(np.subtract(o.shape, n.shape)+1)
+  o,n = get_inputs(inputs, mask) #  o：归一化后的 场景当前高度图 (H, W)    n：归一化后的 待放置物体高度图 (h, w)
+  f = np.zeros(np.subtract(o.shape, n.shape)+1) #创建一个二维数组 f，用于存储“物体在每一个合法放置位置时的评价值（代价）”
+  #subtract是相减
   n_where = n > 0
-
+ # 在所有合法放置位置上，计算“放上这个物体之后，整体最高会有多高”，并优先选择“不会把堆叠高度抬得太高”的位置。
   for i in range(f.shape[0]):
     for j in range(f.shape[1]):
       if mask is None or mask[i,j]:
         f[i,j] = np.max(np.where(
-          n_where,
-          o[i:i+n.shape[0], j:j+n.shape[0]] + n,
-          0,
+          n_where,          # 条件：物体哪些位置有效，是布尔值true/false
+          o[i:i+n.shape[0], j:j+n.shape[0]] + n,  # 将物体放到场景对应区域后 叠加高度 # 条件为 True → 用叠加后的高度
+          0, #o_sub = o[i:i+h, j:j+w] 是场景中对应位置的高度    # 条件为 False → 空白位置高度设为 0
         ))
 
   return f
 
+# 计算每个可能放置位置的“局部不平整度”
 def difference(inputs, mask=None, difference_exponent=2, weights_exponent=2, return_height=False, **kwargs):
   """Difference based heuristic."""
   o,n = get_inputs(inputs)
