@@ -206,6 +206,9 @@ methods = {
 #生成一些候选动作（可以是随机的）
 #根据某个启发式评分函数（如高度最低、局部平整度最好）筛选最优动作
 
+
+#Baseline.call 的核心逻辑是：在目标合法的放置位置中，优先筛选空间上稳定的局部最优点；若不存在，则退化为全局最小代价选择，并将代价映射为贪心策略可用的奖励形式。
+
 @gin.configurable(module='stackrl') #这是 Gin 配置库 的装饰器，允许通过配置文件（.gin 文件）动态修改类的初始化参数
 class Baseline(agents.PyGreedy): #Baseline 继承自 agents.PyGreedy，说明是一个贪心策略代理（Greedy Agent）
   def __init__(。# 每次你创建一个新对象，__init__ 都会执行一次，初始化这个对象的属性。
@@ -221,7 +224,7 @@ class Baseline(agents.PyGreedy): #Baseline 继承自 agents.PyGreedy，说明是
   ):  # 检查并处理 method 参数，确保它是一个合法的启发式策略函数
     if isinstance(method, str): 
       if method in methods:
-        method = methods[method]
+        method = methods[method] 
       else:
         raise ValueError(
           "Invalid value {} for argument method. Must be in {}".format(method, methods)
@@ -241,26 +244,26 @@ class Baseline(agents.PyGreedy): #Baseline 继承自 agents.PyGreedy，说明是
     self.batchwise = batchwise
 
   def call(self, inputs):  # 根据启发式策略计算每个可能放置位置的分数，并返回最佳动作索引及对应负分数（用于排序或选择）
-    values = self.model(inputs, **self.kwargs)
-    if self.goal:
-      mask = goal_overlap(inputs, **self.kwargs)
+    values = self.model(inputs, **self.kwargs)  # 计算启发式评分图，把当前物体放在位置 (i, j) 时的“代价 / 不优程度”
+    if self.goal:     # 是否启用“目标区域约束”，只允许把物体放在“能覆盖目标区域”的位置，
+      mask = goal_overlap(inputs, **self.kwargs)  # 计算目标重叠掩码 mask
       
-      if self.minorder:
-        minima = np.logical_and(
+      if self.minorder:          # 计算局部极小值点     避免选择“边缘噪声极小值”
+        minima = np.logical_and(  
           mask,
           ndimage.minimum_filter(values, size=1+2*self.minorder, mode='constant') == values,
         )
 
-        if np.any(minima):
-          return np.argmin(np.where(minima, values, np.inf)), -np.where(mask, values, values[mask].max()+0.001)
+        if np.any(minima):  # 如果存在至少一个合法的局部最优点
+          return np.argmin(np.where(minima, values, np.inf)), -np.where(mask, values, values[mask].max()+0.001)  #在所有局部极小值位置中，选择代价最小的那个
 
       return np.argmin(np.where(mask, values, np.inf)), -np.where(mask, values, values[mask].max()+0.001)
-    else:
+    else:    #不启用目标约束（goal=False）    #在整个动作空间中直接选代价最小的位置       #同时返回完整的负代价评分图
       return np.argmin(values), -values
 
 
 
-if False:
+if False: #被刻意保留但永远不会执行的代码块
 
   def _apply_limit_and_exponent(inputs, **kwargs):
     limit = kwargs.get('limit', 0)
