@@ -29,12 +29,12 @@ def get_inputs(inputs, mask=None):   #从环境返回的 inputs 中提取并归�
 
 #基于高度的启发式策略函数
 def height(inputs, mask=None, **kwargs): #把当前物体 n 放到场景 o 的每一个可能位置后，形成的最大高度
-  #mask = None的意思是，如果不传入参数，mask就是None
+  #mask = None的意思是，如果不传入参数，mask就是None。**kwargs 代表 任意数量的关键字参数，在调用的时候即使传入了没有声明的变量也不会报错
   """Height based heuristic."""
   o,n = get_inputs(inputs, mask) #  o：归一化后的 场景当前高度图 (H, W)    n：归一化后的 待放置物体高度图 (h, w)
   f = np.zeros(np.subtract(o.shape, n.shape)+1) #创建一个二维数组 f，用于存储“物体在每一个合法放置位置时的评价值（代价）”
   #subtract是相减
-  n_where = n > 0
+  n_where = n > 0 #将n>0的变为true，是有效格子，n<0变为false是无效格子
  # 在所有合法放置位置上，计算“放上这个物体之后，整体最高会有多高”，并优先选择“不会把堆叠高度抬得太高”的位置。
   for i in range(f.shape[0]):
     for j in range(f.shape[1]):
@@ -47,53 +47,64 @@ def height(inputs, mask=None, **kwargs): #把当前物体 n 放到场景 o 的�
 
   return f
 
-# 计算每个可能放置位置的“局部不平整度”
+
+# 计算每个可能放置位置的“局部不平整度”  选择堆叠后高度变化最小的位置，避免把物体放得太不平整 ，位置加权幂次，用于更关注物体中心或边缘
 def difference(inputs, mask=None, difference_exponent=2, weights_exponent=2, return_height=False, **kwargs):
+#inputs：输入场景和待放物体的高度图        mask：可选的合法放置位置掩码       difference_exponent：高度差的幂次，用于放大高差影响
+#weights_exponent：加权幂次，用于强调物体中心或边缘      return_height：是否同时返回局部最大高度      **kwargs：允许传入额外参数给其他函数
   """Difference based heuristic."""
   o,n = get_inputs(inputs)
 
-  f = np.zeros(np.subtract(o.shape, n.shape)+1)
-  height = np.zeros_like(f) if return_height else None
+  #Python 的数组索引是 左闭右开，所以为了取到(H-h, W-w)，就必须+1
+  f = np.zeros(np.subtract(o.shape, n.shape)+1)    #f ：存储每个放置位置的**“不平整代价值”**     计算所有合法放置位置的数量
+  height = np.zeros_like(f) if return_height else None    # 存储局部最大高度
+  #<结果1> if <条件> else <结果2>    如果 <条件> 为 True，就返回 <结果1>   如果 <条件> 为 False，就返回 <结果2>
+  
+  n_where = n > 0 #只考虑物体实际占据的格子，n_where 是布尔矩阵，标记物体有效的高度格子
 
-  n_where = n > 0
-
-  if weights_exponent > 0:
-    _wi = (np.arange(n.shape[0], dtype='float') - n.shape[0]/2)**2
-    _wj = (np.arange(n.shape[1], dtype='float') - n.shape[1]/2)**2
-    w = (_wi[:,np.newaxis] + _wj[np.newaxis,:])**(weights_exponent/2)
-    w = np.where(n_where, w, 0)
-    w /= w.sum()
+  if weights_exponent > 0:   #是否使用中心加权，weights_exponent > 0 → 使用 中心加权
+    _wi = (np.arange(n.shape[0], dtype='float') - n.shape[0]/2)**2   #生成物体高度图行索引数组，并计算每行距离物体中心的平方
+    _wj = (np.arange(n.shape[1], dtype='float') - n.shape[1]/2)**2   #生成列索引数组，并计算每列距离物体中心的平方
+    w = (_wi[:,np.newaxis] + _wj[np.newaxis,:])**(weights_exponent/2)  #把行和列距离平方相加 → 得到每个格子到物体中心的距离平方和
+    w = np.where(n_where, w, 0)   # 是布尔矩阵，只标记物体实际占据的格子
+    w /= w.sum()   # 确保所有权重之和为 1
   else:
-    w = n_where.astype('float')
+    w = n_where.astype('float')  #不使用中心加权，给每个格子相等权重，.astype('float') → 把布尔值转换成浮点数
     w /= w.sum()
- 
+
+  
   for i in range(f.shape[0]):
     for j in range(f.shape[1]):
-      if mask is None or mask[i,j]:
-        h = o[i:i+n.shape[0], j:j+n.shape[0]] + n
-        h0 = np.max(np.where(n_where, h, 0))
-        f[i,j] = np.sum(w*np.abs(h0 - h)**difference_exponent)
-
-        if height is not None:
-          height[i,j] = h0
+      if mask is None or mask[i,j]:        # mask 是可选的布尔矩阵，标记哪些位置是允许放置的，如果 mask 为 None → 所有位置都合法
+        h = o[i:i+n.shape[0], j:j+n.shape[0]] + n   # 取出场景 o 中放置物体 n 区域对应的高度片段
+        h0 = np.max(np.where(n_where, h, 0))    # h0是放置物体后该区域的高度
+        f[i,j] = np.sum(w*np.abs(h0 - h)**difference_exponent) # h0 - h → 每个格子高度与局部最高点的差，使用w权重矩阵进行加权
+        #计算“局部不平整度”，也就是衡量把物体放在当前位置 (i,j) 后，堆叠表面有多不平整
+        
+        if height is not None:   # 记录局部最大高度
+          height[i,j] = h0 
 
   if height is not None:
-    f = f, height
-
+    f = f, height。 #  f = f, height 不是数学赋值，而是 Python 的元组打包（tuple packing）
+    #把两个数组打包成一个元组，让函数一次返回两个结果，不是“同时赋值”，不是“追加”，而是 变量 f 的类型发生了改变。
   return f
 
-def corrcoef(inputs, mask=None, localized=False, **kwargs):
+
+def corrcoef(inputs, mask=None, localized=False, **kwargs):  
+  # 把待放置物体 n 当作一个“模板”，在场景高度图 o 上滑动，计算每个可能位置处二者的“相关系数”，用来衡量“形状是否匹配”。
   """Correlation coefficient based heuristic."""
   o,n = get_inputs(inputs)
 
-  if not localized:
-    if cv is not None:
-      return cv.matchTemplate(o.astype('float32'),n.astype('float32'),cv.TM_CCOEFF_NORMED)
-
-    n_where = np.ones_like(n, dtype='bool')
+  if not localized:   # 是不是“非局部相关”（localized=False）
+    if cv is not None:     # 模板匹配（Template Matching）函数，用于在一张大图中滑动搜索一张小图（模板），并计算每个位置的相似度或差异评分。
+      return cv.matchTemplate(o.astype('float32'),n.astype('float32'),cv.TM_CCOEFF_NORMED)#归一化相关系数
+      # 把物体高度图 n 当作模板，在场景高度图 o 上滑动，计算每一个可能放置位置的“归一化相关系数”，并把整张评分图直接返回
+      
+    n_where = np.ones_like(n, dtype='bool')  #np.ones_like(n)：形状和 n 一样     全部是 True
   else:
-    n_where = n > 0
+    n_where = n > 0   #  只关心“物体区域” 
 
+  #手写的归一化互相关（Normalized Cross-Correlation, NCC），都是在计算两个高度图（模板 n 与场景 o 的局部片段）之间的相关性。
   f = np.zeros(np.subtract(o.shape, n.shape)+1)
 
   n_count = np.count_nonzero(n_where)
@@ -121,23 +132,29 @@ def corrcoef(inputs, mask=None, localized=False, **kwargs):
 
 def gradcorr(inputs, sobel=False, **kwargs):
   """Correlation coefficient based heuristic."""
-  o,n = get_inputs(inputs)
+  # 使用梯度相关系数（Gradient Correlation）来评估物体 n 放置在场景 o 的每个位置的匹配程度。
+  # sobel=True 时使用 Sobel 算子计算梯度，否则使用 np.gradient。
+  o,n = get_inputs(inputs)  # o: 场景高度图, n: 待放置物体高度图
 
-  uniform = np.ones_like(n)
+  uniform = np.ones_like(n)  # uniform 是一个与 n 同尺寸的全 1 数组，用于加权卷积
 
-  if sobel:
+  if sobel:   # 使用 Sobel 算子分别计算 x 轴和 y 轴梯度
     o_dx, o_dy = ndimage.sobel(o, axis=0), ndimage.sobel(o, axis=1)
     n_dx, n_dy = ndimage.sobel(n, axis=0), ndimage.sobel(n, axis=1)
-  else:
+  else:    # 使用 np.gradient 计算梯度（数值差分）
     o_dx, o_dy = np.gradient(o)
     n_dx, n_dy = np.gradient(n)
 
+  # 计算归一化分母部分（局部梯度平方和的卷积）
   vx = signal.correlate2d(o_dx**2, uniform, mode='valid')*np.sum(n_dx**2)
   vy = signal.correlate2d(o_dy**2, uniform, mode='valid')*np.sum(n_dy**2)
 
+  # 计算 x 方向的梯度相关系数
   fx = signal.correlate2d(o_dx, n_dx, mode='valid')/np.sqrt(np.where(
     vx, vx, 1.
   ))
+  
+  # 计算 y 方向的梯度相关系数
   fy = signal.correlate2d(o_dy, n_dy, mode='valid')/np.sqrt(np.where(
     vy, vy, 1.
   ))
@@ -146,18 +163,22 @@ def gradcorr(inputs, sobel=False, **kwargs):
 
 def correlate(inputs, **kwargs):
   o,n = get_inputs(inputs)
-  return signal.correlate2d(o,n,mode='valid')/n.sum()
+  
+  #计算二维互相关（cross-correlation），相当于把 n 当作模板在 o 上滑动匹配，每个位置得到一个匹配分数
+  #每个位置得到一个匹配分数
+  #mode='valid' → 只计算完整重叠的位置，不超出边界
+  return signal.correlate2d(o,n,mode='valid')/n.sum()  
 
-def random(inputs, seed=None, **kwargs):
+def random(inputs, seed=None, **kwargs): # 创建随机数生成器，如果传入 seed，可以保证每次生成相同的随机数
   """Returns random values in the same shape as the heuristics."""
   rng = np.random.default_rng(seed)
   return rng.random(
     (np.subtract(inputs[0].shape, inputs[1].shape)[:-1]+1)
-  )
+  )  # 生成随机矩阵并返回，随机矩阵形状为 output_shape，每个元素在 [0, 1) 之间
 
-def goal_overlap(inputs, threshold=0.75, **kwargs):
-  b = (inputs[0][:,:,0] < inputs[0][:,:,1]).astype('int')
-  n = (inputs[1][:,:,0] > 0).astype('int')
+def goal_overlap(inputs, threshold=0.75, **kwargs):  # 找出物体放置位置与“目标高度区域”的重叠度足够高的位置。
+  b = (inputs[0][:,:,0] < inputs[0][:,:,1]).astype('int')  # 场景中还需要填充的目标位置（目标高度比当前高度高）
+  n = (inputs[1][:,:,0] > 0).astype('int') # 待放置物体占据的格子
   f = signal.correlate2d(b, n, mode='valid')
   return f >= threshold*f.max()
 
