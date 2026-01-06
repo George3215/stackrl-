@@ -9,22 +9,30 @@ References:
   [4] Rainbow: Combining Improvements in Deep Reinforcement Learning
     (https://arxiv.org/abs/1710.02298)
 """
+"""
+标准 DQN (Nature 2015)：使用目标网络（Target Network）来稳定训练。
+Double DQN (DDQN)：通过参数 double=True 开启，旨在解决标准 DQN 中容易出现的“过估计”动作价值的问题。
+优先经验回放 (Prioritized Experience Replay, PER)：通过参数 prioritization 开启。它让智能体更多地去学习那些“TD误差”较大的样本，即让智能体从那些让它感到意外的经历中学习更多。
+多步预测 (N-step DQN)：通过 n_step 参数设置。它不只看下一步的奖励，而是计算未来 N 步的累积奖励，能加快学习速度。
+Huber Loss：一种鲁棒的损失函数，结合了均方误差（MSE）和平均绝对误差（MAE），对异常值（Outliers）不敏感。
+"""
 import gin
 import tensorflow as tf
 from tensorflow import keras as k
 
 from stackrl.agents.memory import ReplayMemory
 
+#在强化学习实验中，我们需要频繁调整超参数（比如 learning_rate 或 gamma）。使用 Gin 后，你可以在不改动 Python 代码的情况下，通过修改一个文本文件来更改 DQN 类 __init__ 函数里的默认参数值。
 @gin.configurable(module='stackrl.agents')
-class DQN(tf.Module):
+class DQN(tf.Module):  
   """DQN agent [1]"""
   # pylint is messing up with tf...
   # pylint: disable=no-member,unexpected-keyword-arg,no-value-for-parameter,invalid-unary-operand-type
   metadata = {
     'exploration_modes': [
-      'epsilon-greedy',
-      'boltzmann',
-    ],
+      'epsilon-greedy',   # ε-贪婪策略：以 ε 概率随机探索，1-ε 概率选择最优动作
+      'boltzmann',        # 玻尔兹曼采样（Softmax）：根据 Q 值的概率分布进行探索
+    ],                    #玻尔兹曼采样，一种更高级的选择。Q 值越高的动作，被选中的概率越大，但不是绝对选中。它通过一个“温度”参数来平滑动作的选择概率。
   }
 
   def __init__(
@@ -109,7 +117,7 @@ class DQN(tf.Module):
       TypeError: if any argument is an invalid type.
       ValueError: if any argument has an invalid value.
     """
-    super(DQN, self).__init__(name=name)
+    super(DQN, self).__init__(name=name)  #初始化 Q 网络（及其目标网络）和配置优化器。
     # Set Q network
     if isinstance(q_net, k.Model):
       self._q_net = q_net
