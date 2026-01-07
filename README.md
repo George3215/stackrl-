@@ -49,3 +49,8 @@ Run this package with:
 [nets]: /stackrl/nets
 [train]: /stackrl/train
 [training]: /stackrl/train/training.py
+
+
+训练命令：
+python __main__.py train -d ./train_output -c train_config2.gin
+
